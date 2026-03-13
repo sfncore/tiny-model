@@ -9,6 +9,10 @@ message, the model defaults to "none".
 Fix: Extract (context → action) pairs where each example ends with a meaningful
 tool call. Include balanced "none" examples for idle scenarios.
 
+Handles both formats:
+  - Format B (pre-converted): assistant content is JSON like {"tool": "...", "args": {...}}
+  - OpenAI function-calling: assistant has tool_calls array with function.name/arguments
+
 Usage:
     python extract_decisions.py
     python extract_decisions.py --max-context-turns 6 --none-ratio 0.2
@@ -44,13 +48,50 @@ If no action is needed, output:
 Available tools: gt_polecat_list, gt_polecat_nuke, gt_peek, gt_session_status, gt_nudge, gt_mail_inbox, gt_mail_read, gt_mail_send, gt_patrol_report, gt_handoff, gt_escalate, bd_show, bd_list, bd_close, bd_children, check_git_state, check_tmux_session, bash"""
 
 
-def extract_tool(content: str) -> str | None:
-    """Extract tool name from a Format B assistant message."""
-    try:
-        parsed = json.loads(content)
-        return parsed.get("tool")
-    except (json.JSONDecodeError, TypeError):
-        return None
+def extract_tool_from_message(m: dict) -> tuple[str | None, str | None]:
+    """
+    Extract tool name and Format B JSON from a message.
+
+    Returns (tool_name, format_b_json) or (None, None).
+
+    Handles:
+      1. Format B: content is already JSON like {"tool": "...", "args": {...}}
+      2. OpenAI function-calling: tool_calls array with function.name/arguments
+    """
+    # Try Format B first (content is JSON)
+    content = m.get("content", "") or ""
+    if content:
+        try:
+            parsed = json.loads(content)
+            if isinstance(parsed, dict) and "tool" in parsed:
+                return parsed["tool"], content
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Try OpenAI function-calling format
+    tool_calls = m.get("tool_calls", [])
+    if tool_calls:
+        tc = tool_calls[0]  # Take first tool call
+        func = tc.get("function", {})
+        name = func.get("name", "")
+        if name:
+            try:
+                args = json.loads(func.get("arguments", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                args = {}
+            format_b = json.dumps({"tool": name, "args": args})
+            return name, format_b
+
+    return None, None
+
+
+def build_context_message(m: dict) -> str:
+    """
+    Build a context string from a message for the user context window.
+    Combines assistant text + tool results into a coherent context turn.
+    """
+    content = m.get("content", "") or ""
+    return content
 
 
 def extract_decision_pairs(conv: list, max_context_turns: int = 8) -> list:
@@ -58,35 +99,44 @@ def extract_decision_pairs(conv: list, max_context_turns: int = 8) -> list:
     Extract (context → decision) pairs from a multi-turn conversation.
 
     For each assistant turn with an action tool, create a training example
-    containing the preceding context + that assistant turn.
+    containing the preceding context + that assistant turn as Format B JSON.
     """
     pairs = []
-    messages = []  # running list of (role, content)
+    context_messages = []  # running context of user + tool messages
 
     for m in conv:
         role = m.get("role", "")
-        content = m.get("content", "") or ""
 
         if role == "system":
-            continue  # We'll add our own system prompt
+            continue
 
         if role == "user":
-            messages.append({"role": "user", "content": content})
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "user", "content": content})
+
+        elif role == "tool":
+            # Tool responses become user context (the witness sees tool output)
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "user", "content": content})
 
         elif role == "assistant":
-            tool = extract_tool(content)
-            if tool and tool in ACTION_TOOLS:
+            tool_name, format_b = extract_tool_from_message(m)
+
+            if tool_name and tool_name in ACTION_TOOLS:
                 # Create a training pair: context → this action
-                # Take last N messages as context
-                context = messages[-max_context_turns:] if len(messages) > max_context_turns else messages[:]
-                if context:  # need at least one user message
+                context = context_messages[-max_context_turns:] if len(context_messages) > max_context_turns else context_messages[:]
+                if context:
                     pair = [{"role": "system", "content": SYSTEM_PROMPT_JSON}]
                     pair.extend(context)
-                    pair.append({"role": "assistant", "content": content})
+                    pair.append({"role": "assistant", "content": format_b})
                     pairs.append(pair)
 
-            # Add to running context regardless
-            messages.append({"role": "assistant", "content": content})
+            # Add assistant text to context if it has content
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "assistant", "content": content})
 
     return pairs
 
@@ -94,39 +144,67 @@ def extract_decision_pairs(conv: list, max_context_turns: int = 8) -> list:
 def extract_none_pairs(conv: list, max_context_turns: int = 8) -> list:
     """
     Extract examples where "none" is the correct answer.
-    Only take the first "none" turn from each conversation (idle patrol pattern).
+
+    In raw sessions, idle patrols show as assistant messages with no tool calls
+    following a context that shows everything is healthy. We look for patterns
+    where the witness saw healthy state and took no action.
     """
     pairs = []
-    messages = []
+    context_messages = []
+
+    # Track consecutive user/tool messages without an action tool call
+    idle_contexts = []
 
     for m in conv:
         role = m.get("role", "")
-        content = m.get("content", "") or ""
 
         if role == "system":
             continue
         if role == "user":
-            messages.append({"role": "user", "content": content})
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "user", "content": content})
+        elif role == "tool":
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "user", "content": content})
         elif role == "assistant":
-            tool = extract_tool(content)
-            if tool == "none" and messages:
-                # Only take the first none per conversation
-                context = messages[-max_context_turns:] if len(messages) > max_context_turns else messages[:]
-                pair = [{"role": "system", "content": SYSTEM_PROMPT_JSON}]
-                pair.extend(context)
-                pair.append({"role": "assistant", "content": content})
-                pairs.append(pair)
-                return pairs  # Only one per conversation
-            messages.append({"role": "assistant", "content": content})
+            tool_name, _ = extract_tool_from_message(m)
+
+            # If assistant has text but no action tool → potential idle/none
+            if not tool_name or tool_name == "none":
+                content = (m.get("content", "") or "").strip()
+                # Look for idle patrol indicators
+                if context_messages and _looks_idle(context_messages):
+                    context = context_messages[-max_context_turns:] if len(context_messages) > max_context_turns else context_messages[:]
+                    none_json = json.dumps({"tool": "none", "args": {}})
+                    pair = [{"role": "system", "content": SYSTEM_PROMPT_JSON}]
+                    pair.extend(context)
+                    pair.append({"role": "assistant", "content": none_json})
+                    pairs.append(pair)
+                    return pairs  # Only one per conversation
+
+            content = build_context_message(m)
+            if content.strip():
+                context_messages.append({"role": "assistant", "content": content})
 
     return pairs
 
 
+def _looks_idle(context: list) -> bool:
+    """Heuristic: does the recent context suggest an idle/healthy state?"""
+    last_few = context[-3:]
+    text = " ".join(m.get("content", "") for m in last_few).lower()
+    idle_signals = ["no polecats", "idle", "no unread", "patrol_count", "healthy",
+                    "no molecules", "nothing on hook", "all clear", "quiet"]
+    return any(signal in text for signal in idle_signals)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Extract decision-focused training pairs")
-    parser.add_argument("--input", default="./dataset/format_b/chunked_2k/train.jsonl",
+    parser.add_argument("--input", default="./dataset/curated/train_openai.jsonl",
                         help="Input training JSONL")
-    parser.add_argument("--eval-input", default="./dataset/format_b/chunked_2k/eval.jsonl",
+    parser.add_argument("--eval-input", default="./dataset/curated/eval_openai.jsonl",
                         help="Input eval JSONL")
     parser.add_argument("--output-dir", default="./dataset/format_b_decisions",
                         help="Output directory")
@@ -152,20 +230,26 @@ def main():
         # Extract action pairs
         action_pairs = []
         for conv in conversations:
-            action_pairs.extend(extract_decision_pairs(conv, args.max_context_turns))
+            msgs = conv.get("messages", conv) if isinstance(conv, dict) else conv
+            action_pairs.extend(extract_decision_pairs(msgs, args.max_context_turns))
 
         # Extract none pairs
         none_pairs = []
         for conv in conversations:
-            none_pairs.extend(extract_none_pairs(conv, args.max_context_turns))
+            msgs = conv.get("messages", conv) if isinstance(conv, dict) else conv
+            none_pairs.extend(extract_none_pairs(msgs, args.max_context_turns))
 
         print(f"  Extracted {len(action_pairs)} action pairs")
         print(f"  Extracted {len(none_pairs)} none pairs")
 
         # Balance: include enough "none" to hit target ratio
         n_action = len(action_pairs)
-        n_none_target = int(n_action * args.none_ratio / (1 - args.none_ratio))
-        n_none_target = min(n_none_target, len(none_pairs))
+        if n_action == 0:
+            print("  WARNING: No action pairs found!")
+            n_none_target = len(none_pairs)
+        else:
+            n_none_target = int(n_action * args.none_ratio / (1 - args.none_ratio))
+            n_none_target = min(n_none_target, len(none_pairs))
 
         if n_none_target < len(none_pairs):
             none_sample = rng.sample(none_pairs, n_none_target)
@@ -177,13 +261,20 @@ def main():
 
         print(f"  Final: {len(all_pairs)} pairs ({len(action_pairs)} action + {len(none_sample)} none)")
 
+        if not all_pairs:
+            print("  Skipping output — no pairs extracted")
+            continue
+
         # Tool distribution
         tool_counts = Counter()
         for pair in all_pairs:
             last_msg = pair[-1]
             if last_msg["role"] == "assistant":
-                tool = extract_tool(last_msg["content"])
-                tool_counts[tool or "UNKNOWN"] += 1
+                try:
+                    parsed = json.loads(last_msg["content"])
+                    tool_counts[parsed.get("tool", "UNKNOWN")] += 1
+                except (json.JSONDecodeError, TypeError):
+                    tool_counts["UNKNOWN"] += 1
 
         print(f"\n  Tool distribution (decision turns only):")
         for tool, count in tool_counts.most_common():
@@ -204,10 +295,8 @@ def main():
     print(f"\n{'='*60}")
     print("Done! Use with train.py:")
     print(f"  python train.py --model smollm2-135m --format b --epochs 3 \\")
-    print(f"    --dataset-dir {args.output_dir} --use-chunked=false \\")
-    print(f"    --max-length 2048")
-    print(f"\nNote: pass the output dir as dataset-dir and DON'T use --use-chunked")
-    print(f"since these are already short, focused examples.")
+    print(f"    --dataset-dir {args.output_dir}")
+    print(f"\nNote: pass the output dir as dataset-dir.")
 
 
 if __name__ == "__main__":
