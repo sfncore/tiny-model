@@ -1,0 +1,21 @@
+# Derived data (regenerate with: python curate.py)
+dataset/
+
+# Model weights and checkpoints
+checkpoints/
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Training artifacts
+wandb/
+runs/
+logs/

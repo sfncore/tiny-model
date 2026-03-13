@@ -1,0 +1,374 @@
+{
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_polecat_list",
+        "description": "List all active polecats (worker agents) in a rig, showing their current status and assigned work.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "rig": {
+              "type": "string",
+              "description": "The rig name to list polecats for (e.g., 'gastown')"
+            }
+          },
+          "required": ["rig"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_polecat_nuke",
+        "description": "Kill a polecat session, delete its worktree, and clean up its agent bead. Use --force to override safety checks when a polecat is in a broken state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "The polecat to nuke, in format 'rig/name' (e.g., 'gastown/furiosa')"
+            },
+            "force": {
+              "type": "boolean",
+              "description": "Override safety checks (use when polecat is in broken/zombie state)",
+              "default": false
+            }
+          },
+          "required": ["target"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_peek",
+        "description": "View the last N lines of a polecat's tmux session output to assess its current state.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "The agent to peek at, in format 'rig/name' (e.g., 'gastown/furiosa')"
+            },
+            "lines": {
+              "type": "integer",
+              "description": "Number of lines to capture from the session",
+              "default": 30
+            }
+          },
+          "required": ["target"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_session_status",
+        "description": "Check the tmux session status of an agent (running/dead, uptime, session ID).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "The agent to check, in format 'rig/name' (e.g., 'gastown/furiosa')"
+            }
+          },
+          "required": ["target"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_nudge",
+        "description": "Send a message directly to another agent's Claude Code session via tmux. Use for waking idle agents or requesting action.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "The agent to nudge (e.g., 'gastown/furiosa', 'mayor/')"
+            },
+            "message": {
+              "type": "string",
+              "description": "The message to send to the agent"
+            }
+          },
+          "required": ["target", "message"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_mail_inbox",
+        "description": "List messages in the witness inbox, showing sender, subject, date, and read status.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_mail_read",
+        "description": "Read the full content of a specific mail message by ID.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "mail_id": {
+              "type": "string",
+              "description": "The mail message ID (e.g., 'hq-lu3kf')"
+            }
+          },
+          "required": ["mail_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_mail_send",
+        "description": "Send a mail message to another agent. Use for protocol messages (MERGE_READY, RECOVERY_NEEDED, ESCALATION) that must survive session death.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "recipient": {
+              "type": "string",
+              "description": "The recipient address (e.g., 'mayor/', 'gastown/refinery')"
+            },
+            "subject": {
+              "type": "string",
+              "description": "The mail subject line"
+            },
+            "body": {
+              "type": "string",
+              "description": "The mail message body"
+            }
+          },
+          "required": ["recipient", "subject", "body"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_patrol_report",
+        "description": "Close the current patrol wisp and start a new one, recording a summary of what happened this cycle.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "summary": {
+              "type": "string",
+              "description": "Summary of the patrol cycle (what was found, actions taken)"
+            }
+          },
+          "required": ["summary"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_handoff",
+        "description": "Hand off to a fresh session with context notes. Use when context is high or after extraordinary actions.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "subject": {
+              "type": "string",
+              "description": "Short handoff subject"
+            },
+            "message": {
+              "type": "string",
+              "description": "Context notes for the next session"
+            }
+          },
+          "required": ["subject", "message"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "gt_escalate",
+        "description": "Escalate an issue to the Mayor with a severity level.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "severity": {
+              "type": "string",
+              "enum": ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
+              "description": "Severity level of the escalation"
+            },
+            "message": {
+              "type": "string",
+              "description": "Description of the issue being escalated"
+            }
+          },
+          "required": ["severity", "message"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bd_show",
+        "description": "View details of a bead (issue/wisp) including status, description, assignee, and labels.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "bead_id": {
+              "type": "string",
+              "description": "The bead ID to show (e.g., 'gt-wisp-btm', 'hq-wisp-2v214')"
+            }
+          },
+          "required": ["bead_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bd_list",
+        "description": "List beads matching filter criteria (status, type, label, assignee).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": ["open", "in_progress", "closed"],
+              "description": "Filter by status"
+            },
+            "type": {
+              "type": "string",
+              "description": "Filter by type (task, epic, agent, merge-request, timer)"
+            },
+            "label": {
+              "type": "string",
+              "description": "Filter by label (e.g., 'cleanup', 'swarm', 'timer')"
+            },
+            "assignee": {
+              "type": "string",
+              "description": "Filter by assignee (e.g., 'gastown')"
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bd_close",
+        "description": "Close/complete a bead (mark as done).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "bead_id": {
+              "type": "string",
+              "description": "The bead ID to close"
+            }
+          },
+          "required": ["bead_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "bd_children",
+        "description": "List child beads of an epic/parent bead.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "bead_id": {
+              "type": "string",
+              "description": "The parent bead ID"
+            }
+          },
+          "required": ["bead_id"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "check_git_state",
+        "description": "Check a polecat's git repository state (uncommitted changes, unpushed commits).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "polecat_path": {
+              "type": "string",
+              "description": "Path to the polecat's git worktree"
+            }
+          },
+          "required": ["polecat_path"]
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "check_tmux_session",
+        "description": "Check if specific tmux sessions are alive (deacon, refinery, etc.).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "sessions": {
+              "type": "array",
+              "items": {"type": "string"},
+              "description": "Session names to check (e.g., ['hq-deacon', 'gt-refinery'])"
+            }
+          },
+          "required": ["sessions"]
+        }
+      }
+    }
+  ],
+  "decision_taxonomy": {
+    "PATROL_IDLE": {
+      "description": "No polecats active, all infrastructure healthy. No action needed.",
+      "typical_tools": ["gt_polecat_list", "check_tmux_session", "bd_list"],
+      "outcome": "Close patrol, create new patrol wisp"
+    },
+    "NUDGE": {
+      "description": "Polecat appears stuck or idle. Send a wake-up message.",
+      "typical_tools": ["gt_polecat_list", "gt_peek", "gt_nudge"],
+      "outcome": "Nudge sent, continue monitoring"
+    },
+    "ESCALATE": {
+      "description": "Repeated nudges failed, crash loop detected, or work cannot be recovered.",
+      "typical_tools": ["gt_mail_send", "gt_escalate"],
+      "outcome": "Mayor notified for reassignment"
+    },
+    "NUKE": {
+      "description": "Polecat in broken state, git clean, safe to kill.",
+      "typical_tools": ["check_git_state", "gt_polecat_nuke"],
+      "outcome": "Session killed, worktree deleted, agent bead closed"
+    },
+    "FORCE_NUKE": {
+      "description": "Polecat in broken state, repeated failures, override safety checks.",
+      "typical_tools": ["gt_polecat_nuke"],
+      "outcome": "Forced kill, escalation to Mayor for work recovery"
+    },
+    "MERGE_READY": {
+      "description": "Polecat completed work, git state clean, notify refinery before cleanup.",
+      "typical_tools": ["check_git_state", "gt_mail_send"],
+      "outcome": "Refinery notified, polecat can be nuked after"
+    },
+    "RECOVER": {
+      "description": "Polecat has unpushed work that needs saving before cleanup.",
+      "typical_tools": ["check_git_state", "gt_mail_send"],
+      "outcome": "Mayor notified for recovery, no nuke"
+    },
+    "HANDOFF": {
+      "description": "Context high or extraordinary action taken. Hand off to fresh session.",
+      "typical_tools": ["gt_handoff"],
+      "outcome": "Session ends, next session picks up from hook"
+    }
+  }
+}
