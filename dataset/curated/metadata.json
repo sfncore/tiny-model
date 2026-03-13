@@ -1,0 +1,27 @@
+{
+  "total_sessions_scanned": 23,
+  "sessions_kept": 19,
+  "train_count": 15,
+  "eval_count": 4,
+  "min_quality": 0.2,
+  "split_ratio": 0.8,
+  "seed": 42,
+  "total_messages": 2025,
+  "total_witness_tool_calls": 547,
+  "action_distribution": {
+    "gt_patrol_report": 11,
+    "gt_mail_send": 7,
+    "gt_polecat_nuke": 2
+  },
+  "session_dirs": [
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-nvimconfig-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-sfgastown-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-bvnvim-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-sf-workflows-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-lora-forge-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-gastown-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-hivemind-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-claudecode-witness",
+    "/home/ubuntu/.claude/projects/-home-ubuntu-gt-node0-witness"
+  ]
+}
