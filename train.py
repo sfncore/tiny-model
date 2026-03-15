@@ -3,7 +3,7 @@
 Fine-tuning script for witness tool-calling models.
 
 Supports full fine-tune and LoRA on any HuggingFace causal LM.
-Designed for CPU-only training.
+Auto-detects GPU and uses fp16 when CUDA is available.
 
 Usage:
     python train.py --model SmolLM2-135M --format b --epochs 3
@@ -32,6 +32,7 @@ MODELS = {
     "smollm2-135m": "HuggingFaceTB/SmolLM2-135M-Instruct",
     "smollm2-360m": "HuggingFaceTB/SmolLM2-360M-Instruct",
     "qwen3-0.6b": "Qwen/Qwen3-0.6B",
+    "granite-350m": "ibm-granite/granite-4.0-350m",
 }
 
 
@@ -92,7 +93,7 @@ def main():
     parser.add_argument("--epochs", type=int, default=3)
     parser.add_argument("--batch-size", type=int, default=1)
     parser.add_argument("--lr", type=float, default=2e-4)
-    parser.add_argument("--max-length", type=int, default=2048,
+    parser.add_argument("--max-length", type=int, default=8192,
                         help="Max sequence length")
     parser.add_argument("--lora", action="store_true",
                         help="Use LoRA (default: full fine-tune)")
@@ -105,6 +106,15 @@ def main():
                         help="Max training examples (0=all, useful for quick smoke tests)")
     parser.add_argument("--gradient-accumulation", type=int, default=4)
     args = parser.parse_args()
+
+    # Require GPU
+    if not torch.cuda.is_available():
+        print("ERROR: CUDA not available. GPU required for training.")
+        print("CPU training will OOM on this box. Aborting.")
+        return
+    device = "cuda"
+    dtype = torch.bfloat16
+    print(f"Device: {device} (bf16) — {torch.cuda.get_device_name(0)}")
 
     model_id = MODELS[args.model]
     fmt_dir = f"format_{args.format}"
@@ -138,9 +148,10 @@ def main():
     print("Loading model...")
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
-        dtype=torch.float32,
+        torch_dtype=dtype,
         trust_remote_code=True,
     )
+    model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"Model: {n_params/1e6:.1f}M params")
@@ -205,7 +216,7 @@ def main():
         metric_for_best_model="eval_loss",
         greater_is_better=False,
         report_to="none",
-        bf16=False,
+        bf16=True,
         fp16=False,
         dataloader_num_workers=0,
         max_length=args.max_length,
@@ -247,12 +258,14 @@ def main():
     ], tokenize=False, add_generation_prompt=True)
 
     inputs = tokenizer(test_prompt, return_tensors="pt")
+    input_len = inputs["input_ids"].shape[1]
+    inputs = {k: v.to(device) for k, v in inputs.items()}
     start = time.perf_counter()
     with torch.no_grad():
         out = model.generate(**inputs, max_new_tokens=100, do_sample=False)
     inf_time = time.perf_counter() - start
 
-    generated = tokenizer.decode(out[0][inputs.input_ids.shape[1]:], skip_special_tokens=True)
+    generated = tokenizer.decode(out[0][input_len:], skip_special_tokens=True)
     print(f"  Latency: {inf_time*1000:.0f}ms")
     print(f"  Output:  {generated[:300]}")
 
