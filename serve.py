@@ -21,6 +21,7 @@ import shlex
 import subprocess
 import sys
 import time
+from datetime import datetime, timezone
 
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
@@ -392,12 +393,48 @@ def _build_command(tool: str, args: dict) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Shadow structured logger
+# ---------------------------------------------------------------------------
+
+def _shadow_log_path(base_dir: str, rig: str | None) -> str:
+    """Return today's shadow log JSONL path, creating directories as needed."""
+    os.makedirs(base_dir, exist_ok=True)
+    date_str = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    rig_tag = rig or "default"
+    return os.path.join(base_dir, f"shadow_{rig_tag}_{date_str}.jsonl")
+
+
+def write_shadow_record(shadow_log_dir: str, rig: str | None, cycle: int,
+                        snapshot: str, decision: dict, raw_output: str):
+    """Append a structured JSON record to the shadow log JSONL file."""
+    path = _shadow_log_path(shadow_log_dir, rig)
+    record = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "rig": rig or "default",
+        "cycle": cycle,
+        "system_prompt": SYSTEM_PROMPT,
+        "snapshot": snapshot,
+        "tiny_decision": {
+            "tool": decision.get("tool", "none"),
+            "args": decision.get("args", {}),
+        },
+        "tiny_latency_ms": decision.get("_latency_ms", 0),
+        "tiny_raw_output": raw_output,
+    }
+    with open(path, "a") as f:
+        json.dump(record, f, default=str)
+        f.write("\n")
+        f.flush()
+    log.debug("Shadow record written to %s (cycle=%d)", path, cycle)
+
+
+# ---------------------------------------------------------------------------
 # Main patrol loop
 # ---------------------------------------------------------------------------
 
 def patrol_loop(model, tokenizer, *, shadow: bool = False,
                 once: bool = False, fixed_interval: int | None = None,
-                rig: str | None = None):
+                rig: str | None = None, shadow_log: str | None = None):
     """Run the patrol loop with exponential backoff."""
     interval = fixed_interval or BACKOFF_MIN
     cycle = 0
@@ -424,6 +461,11 @@ def patrol_loop(model, tokenizer, *, shadow: bool = False,
             tool = decision.get("tool", "none")
             latency = decision.get("_latency_ms", 0)
             log.info("[%s] decision: tool=%s latency=%.0fms", ts, tool, latency)
+
+            # 2b. Structured shadow log
+            if shadow and shadow_log:
+                raw_output = decision.get("_raw", "")
+                write_shadow_record(shadow_log, rig, cycle, context, decision, raw_output)
 
             # 3. Execute
             result = execute_tool(decision, shadow=shadow)
@@ -468,6 +510,8 @@ def main():
                         help="Rig name for rich context gathering (enables 10-command snapshot)")
     parser.add_argument("--shadow", action="store_true",
                         help="Shadow mode: log decisions but do not execute")
+    parser.add_argument("--shadow-log", type=str, default=None,
+                        help="Directory for structured shadow JSONL logs (default: ./shadow_log/)")
     parser.add_argument("--once", action="store_true",
                         help="Run a single patrol cycle then exit")
     parser.add_argument("--interval", type=int, default=None,
@@ -483,8 +527,15 @@ def main():
     )
 
     model, tokenizer = load_model(args.checkpoint)
+
+    # Default shadow log dir when shadow mode is on
+    shadow_log = args.shadow_log
+    if args.shadow and not shadow_log:
+        shadow_log = os.path.join(os.path.dirname(__file__), "shadow_log")
+
     patrol_loop(model, tokenizer, shadow=args.shadow,
-                once=args.once, fixed_interval=args.interval, rig=args.rig)
+                once=args.once, fixed_interval=args.interval,
+                rig=args.rig, shadow_log=shadow_log)
 
 
 if __name__ == "__main__":
