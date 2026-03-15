@@ -31,8 +31,11 @@ Goal: Find the best sub-1B model for embedded tool calling (context-mode MCP, wi
 - **Tool calling**: Native, IBM-designed for agentic AI at the edge
 - **GGUF**: Yes
 - **VRAM**: ~500MB
-- **Status**: NOT TESTED
-- **Verdict**: STRONG CANDIDATE. 128K context solves the prompt size problem entirely. Native tool calling. Smallest model with real agent capability. Hybrid architecture means efficient inference.
+- **Context**: 32,768 tokens (not 128K — that's the "h" variant)
+- **Status**: TRAINED — 100% tool accuracy (16/16 scenarios)
+- **Trained model**: https://huggingface.co/dunks/granite-350m-witness
+- **Train loss**: 0.3672, eval token accuracy: 91.2%
+- **Verdict**: WINNER. 32K context, native tool calling, 100% eval accuracy. Best sub-1B model tested.
 
 ### 3. Qwen2.5-Coder-0.5B
 - **HF**: `Qwen/Qwen2.5-Coder-0.5B-Instruct`
