@@ -13,16 +13,25 @@ Usage:
 
 import argparse
 import json
+import os
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 import torch
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 app = FastAPI()
+
+# --- Request validation config (env-configurable) ---
+MAX_TOKENS_CAP = int(os.environ.get("TM_MAX_TOKENS_CAP", "2048"))
+MAX_PROMPT_LENGTH = int(os.environ.get("TM_MAX_PROMPT_LENGTH", "8192"))
+INFERENCE_TIMEOUT = int(os.environ.get("TM_INFERENCE_TIMEOUT", "120"))
+
+_inference_pool = ThreadPoolExecutor(max_workers=1)
 
 MODELS = {}
 
@@ -60,7 +69,9 @@ def normalize_content(c):
     return str(c)
 
 
-def resolve_model(name: str) -> str:
+def resolve_model(name: str) -> str | None:
+    if not MODELS:
+        return None
     if name in MODELS:
         return name
     for k in MODELS:
@@ -108,23 +119,81 @@ def list_models():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    body = await request.json()
+    # --- Parse body ---
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "Invalid JSON in request body", "type": "invalid_request_error"}
+        })
 
-    req_model = body.get("model", "smollm2-witness")
-    req_messages = body.get("messages", [])
+    if not isinstance(body, dict):
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "Request body must be a JSON object", "type": "invalid_request_error"}
+        })
+
+    # --- Validate messages ---
+    req_messages = body.get("messages")
+    if not isinstance(req_messages, list) or len(req_messages) == 0:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "'messages' must be a non-empty array", "type": "invalid_request_error"}
+        })
+
+    for i, m in enumerate(req_messages):
+        if not isinstance(m, dict) or "role" not in m:
+            return JSONResponse(status_code=400, content={
+                "error": {"message": f"messages[{i}] must be an object with a 'role' field", "type": "invalid_request_error"}
+            })
+
+    # --- Validate and cap max_tokens ---
     req_max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or 512
+    if not isinstance(req_max_tokens, int) or req_max_tokens < 1:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "'max_tokens' must be a positive integer", "type": "invalid_request_error"}
+        })
+    req_max_tokens = min(req_max_tokens, MAX_TOKENS_CAP)
+
+    # --- Validate temperature ---
     req_temperature = body.get("temperature", 0.0)
+    if not isinstance(req_temperature, (int, float)) or req_temperature < 0:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "'temperature' must be a non-negative number", "type": "invalid_request_error"}
+        })
+
     req_stream = body.get("stream", False)
 
+    # --- Check models available ---
+    req_model = body.get("model", "smollm2-witness")
     model_name = resolve_model(req_model)
+    if model_name is None:
+        return JSONResponse(status_code=503, content={
+            "error": {"message": "No models are currently loaded", "type": "server_error"}
+        })
+
     messages = [
         {"role": m.get("role", "user"), "content": normalize_content(m.get("content"))}
         for m in req_messages
     ]
 
-    generated, input_len, completion_tokens, latency = run_inference(
-        model_name, messages, req_max_tokens, req_temperature
-    )
+    # --- Validate prompt length ---
+    prompt_text = " ".join(m["content"] for m in messages)
+    if len(prompt_text) > MAX_PROMPT_LENGTH:
+        return JSONResponse(status_code=400, content={
+            "error": {
+                "message": f"Prompt too long ({len(prompt_text)} chars). Maximum is {MAX_PROMPT_LENGTH}.",
+                "type": "invalid_request_error",
+            }
+        })
+
+    # --- Run inference with timeout ---
+    try:
+        future = _inference_pool.submit(run_inference, model_name, messages, req_max_tokens, req_temperature)
+        generated, input_len, completion_tokens, latency = future.result(timeout=INFERENCE_TIMEOUT)
+    except FuturesTimeoutError:
+        future.cancel()
+        return JSONResponse(status_code=504, content={
+            "error": {"message": f"Inference timed out after {INFERENCE_TIMEOUT}s", "type": "server_error"}
+        })
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
     created = int(time.time())
