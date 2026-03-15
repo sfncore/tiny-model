@@ -287,6 +287,18 @@ def execute_tool(decision: dict, shadow: bool = False) -> str:
     return result
 
 
+# Tmux session names: alphanumeric, hyphens, underscores, dots, slashes, max 128 chars.
+_TMUX_TARGET_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$")
+
+
+def _valid_tmux_target(session: str) -> bool:
+    """Validate tmux target session name against allowlist pattern."""
+    if not _TMUX_TARGET_RE.match(session):
+        log.warning("Rejected invalid tmux target: %r", session[:80])
+        return False
+    return True
+
+
 def _build_command(tool: str, args: dict) -> str | None:
     """Build a shell command string from tool name and args. Returns None for no-op."""
     if tool == "none":
@@ -352,7 +364,7 @@ def _build_command(tool: str, args: dict) -> str | None:
 
     if tool == "check_tmux_session":
         session = args.get("session", "")
-        if not session:
+        if not session or not _valid_tmux_target(session):
             return None
         return f"tmux has-session -t {shlex.quote(session)}"
 
@@ -379,6 +391,8 @@ def _build_command(tool: str, args: dict) -> str | None:
     if tool == "check_git_state":
         session = args.get("session", "")
         if session:
+            if not _valid_tmux_target(session):
+                return "git status"
             return f"tmux send-keys -t {shlex.quote(session)} 'git status' Enter"
         return "git status"
 
