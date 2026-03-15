@@ -193,6 +193,11 @@ def main():
         size = os.path.getsize(path)
         total_bytes += size
 
+        # Skip symlinks — prevent symlink-following attacks
+        if os.path.islink(path):
+            print(f"  Skipping symlink: {path}", file=sys.stderr)
+            continue
+
         # Derive a stable archive name from the path:
         # ~/.claude/projects/<project>/<session>.jsonl -> <project>/<session>.jsonl
         parts = path.split(os.sep)
@@ -201,6 +206,14 @@ def main():
             archive_name = os.path.join(*parts[proj_idx + 1:])
         except ValueError:
             archive_name = os.path.basename(path)
+
+        # Sanitize: reject any path traversal components
+        name_parts = archive_name.replace("\\", "/").split("/")
+        name_parts = [p for p in name_parts if p and p != ".."]
+        if not name_parts:
+            print(f"  Skipping invalid archive name: {path}", file=sys.stderr)
+            continue
+        archive_name = os.path.join(*name_parts)
 
         stats = quick_session_stats(path)
 
@@ -292,7 +305,8 @@ def main():
             if (i + 1) % 200 == 0:
                 print(f"  Archiving {i + 1}/{len(file_entries)}...",
                       file=sys.stderr)
-            tar.add(entry["source_path"], arcname=entry["archive_name"])
+            tar.add(entry["source_path"], arcname=entry["archive_name"],
+                    filter="data")
 
     archive_mb = os.path.getsize(output_path) / (1024 * 1024)
     ratio = archive_mb / total_mb * 100 if total_mb > 0 else 0
