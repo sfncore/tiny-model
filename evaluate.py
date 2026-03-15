@@ -23,6 +23,7 @@ from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from snapshot_format import format_snapshot
+from shared import load_model
 
 
 VALID_TOOLS = {
@@ -298,23 +299,6 @@ SCENARIOS_RICH = [
 # Default: use rich scenarios
 SCENARIOS = SCENARIOS_RICH
 
-
-def load_model(checkpoint_path: str):
-    """Load model and tokenizer from checkpoint."""
-    print(f"Loading model from {checkpoint_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        dtype=torch.float32,
-        trust_remote_code=True,
-    )
-    model.eval()
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Loaded: {n_params/1e6:.1f}M params")
-    return model, tokenizer
 
 
 def generate_response(model, tokenizer, messages: list, system_prompt: str,

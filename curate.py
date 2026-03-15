@@ -19,6 +19,8 @@ import random
 from pathlib import Path
 from typing import Optional
 
+from shared import find_session_files
+
 # -------------------------------------------------------------------
 # Tool call mapping: maps raw bash commands to structured tool calls
 # -------------------------------------------------------------------
@@ -596,16 +598,6 @@ def to_openai_format(messages: list) -> dict:
 # Main pipeline
 # -------------------------------------------------------------------
 
-def find_session_files(session_dirs: list, min_size: int = 5000, max_size: int = 2_000_000) -> list:
-    """Find all witness session files within size bounds."""
-    files = []
-    for d in session_dirs:
-        d = os.path.expanduser(d)
-        for path in glob.glob(os.path.join(d, "*.jsonl")):
-            size = os.path.getsize(path)
-            if min_size <= size <= max_size:
-                files.append(path)
-    return sorted(files)
 
 
 def process_session(path: str) -> Optional[dict]:

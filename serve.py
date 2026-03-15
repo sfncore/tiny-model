@@ -27,6 +27,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from snapshot_format import format_snapshot
+from shared import load_model
 
 SYSTEM_PROMPT = """You are a Witness agent. You respond ONLY with JSON tool calls.
 
@@ -45,25 +46,8 @@ log = logging.getLogger("witness-shim")
 
 
 # ---------------------------------------------------------------------------
-# Model loading & inference (from evaluate.py)
+# Model loading & inference
 # ---------------------------------------------------------------------------
-
-def load_model(checkpoint_path: str):
-    """Load model and tokenizer from checkpoint."""
-    log.info("Loading model from %s", checkpoint_path)
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        dtype=torch.float32,
-        trust_remote_code=True,
-    )
-    model.eval()
-    n_params = sum(p.numel() for p in model.parameters())
-    log.info("Loaded: %.1fM params", n_params / 1e6)
-    return model, tokenizer
 
 
 def model_decide(model, tokenizer, context: str) -> dict:
