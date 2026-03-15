@@ -130,6 +130,66 @@ def parse_json_output(text: str) -> dict | None:
 
 
 # ---------------------------------------------------------------------------
+# Bash tool sanitization
+# ---------------------------------------------------------------------------
+
+BASH_ALLOWED_COMMANDS = {"git", "tmux", "bd", "gt"}
+BASH_MAX_COMMAND_LENGTH = 1024
+BASH_FORBIDDEN_METACHAR = re.compile(r'[;&|`$(){}\\<>!\n]')
+
+
+def _validate_bash_command(command: str) -> str | None:
+    """Validate a model-generated bash command. Returns error string or None if valid."""
+    if not command:
+        return "empty command"
+    if len(command) > BASH_MAX_COMMAND_LENGTH:
+        return f"command too long ({len(command)} > {BASH_MAX_COMMAND_LENGTH})"
+    if BASH_FORBIDDEN_METACHAR.search(command):
+        return "forbidden shell metacharacter in command"
+    try:
+        parts = shlex.split(command)
+    except ValueError as e:
+        return f"malformed command: {e}"
+    if not parts:
+        return "empty command after parsing"
+    base_cmd = os.path.basename(parts[0])
+    if base_cmd not in BASH_ALLOWED_COMMANDS:
+        return f"command '{base_cmd}' not in allowlist: {BASH_ALLOWED_COMMANDS}"
+    return None
+
+
+def _execute_bash_tool(args: dict, shadow: bool = False) -> str:
+    """Execute a bash tool command with sanitization and shell=False."""
+    command = args.get("command", "")
+
+    error = _validate_bash_command(command)
+    if error:
+        log.warning("Bash tool rejected: %s — command: %s", error, command[:200])
+        return f"[rejected] {error}"
+
+    parts = shlex.split(command)
+    log.info("Bash tool executing: %s", parts)
+
+    if shadow:
+        log.info("[SHADOW] Would run bash: %s", parts)
+        return f"[shadow] {command}"
+
+    try:
+        r = subprocess.run(
+            parts, shell=False, capture_output=True, text=True, timeout=30,
+        )
+        result = r.stdout.strip() if r.returncode == 0 else f"[error] {r.stderr.strip()}"
+        log.info("Bash tool result: %s", result[:200])
+        return result
+    except subprocess.TimeoutExpired:
+        log.warning("Bash tool timed out: %s", command[:200])
+        return "[error] command timed out"
+    except FileNotFoundError:
+        log.warning("Bash tool command not found: %s", parts[0])
+        return f"[error] command not found: {parts[0]}"
+
+
+# ---------------------------------------------------------------------------
 # Patrol context gathering
 # ---------------------------------------------------------------------------
 
@@ -272,6 +332,10 @@ def execute_tool(decision: dict, shadow: bool = False) -> str:
     tool = decision.get("tool", "none")
     args = decision.get("args", {})
 
+    # Bash tool uses sanitized execution path (shell=False, allowlist)
+    if tool == "bash":
+        return _execute_bash_tool(args, shadow)
+
     cmd = _build_command(tool, args)
     if cmd is None:
         log.info("No-op: tool=%s", tool)
@@ -382,11 +446,7 @@ def _build_command(tool: str, args: dict) -> str | None:
             return f"tmux send-keys -t {shlex.quote(session)} 'git status' Enter"
         return "git status"
 
-    if tool == "bash":
-        command = args.get("command", "")
-        if not command:
-            return None
-        return command
+    # bash tool is handled in execute_tool via _execute_bash_tool
 
     log.warning("Unknown tool: %s", tool)
     return None
