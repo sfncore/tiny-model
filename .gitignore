@@ -20,6 +20,9 @@ wandb/
 runs/
 logs/
 
+# Build tools (clone via: git clone --depth 1 https://github.com/ggml-org/llama.cpp.git tools/llama.cpp)
+tools/
+
 # Gas Town (added by gt)
 .runtime/
 .claude/

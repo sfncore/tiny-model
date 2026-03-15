@@ -246,8 +246,20 @@ def main():
     print(f"{'=' * 60}")
 
     # Save final model
-    trainer.save_model(os.path.join(output_dir, "final"))
-    tokenizer.save_pretrained(os.path.join(output_dir, "final"))
+    final_dir = os.path.join(output_dir, "final")
+    trainer.save_model(final_dir)
+    tokenizer.save_pretrained(final_dir)
+
+    # Copy original model config and tokenizer files for GGUF compatibility.
+    # transformers 5.x saves config.json in a format that llama.cpp's converter
+    # doesn't handle correctly. Copying the originals ensures clean conversion.
+    from huggingface_hub import snapshot_download
+    base_dir = snapshot_download(model_id, allow_patterns=["config.json", "tokenizer*", "merges.txt", "vocab.json", "special_tokens_map.json"])
+    import shutil
+    for fname in ["config.json", "tokenizer_config.json", "tokenizer.json", "merges.txt", "vocab.json", "special_tokens_map.json"]:
+        src = os.path.join(base_dir, fname)
+        if os.path.exists(src):
+            shutil.copy2(src, os.path.join(final_dir, fname))
 
     # Quick inference test
     print("\nInference test:")
