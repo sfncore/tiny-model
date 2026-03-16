@@ -1,0 +1,292 @@
+{
+  "checkpoint": "checkpoints/granite-h-350m_fmtb_full_ep3/final",
+  "scenario_format": "rich",
+  "scenario_summary": {
+    "n_scenarios": 16,
+    "valid_json_rate": 1.0,
+    "correct_tool_rate": 1.0,
+    "avg_latency_ms": 4532.900513375807
+  },
+  "scenarios": [
+    {
+      "scenario": "idle_patrol",
+      "description": "No polecats active, everything healthy \u2192 idle or report",
+      "output": "{\"tool\": \"gt_patrol_report\", \"args\": {\"status\": \"idle\", \"note\": \"Rig hq quiet. No polecats active.\"}}",
+      "parsed": {
+        "tool": "gt_patrol_report",
+        "args": {
+          "status": "idle",
+          "note": "Rig hq quiet. No polecats active."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 7808.183851004287
+    },
+    {
+      "scenario": "healthy_polecat",
+      "description": "Active healthy polecat \u2192 peek, monitor, or do nothing",
+      "output": "{\"tool\": \"gt_patrol_report\", \"args\": {\"status\": \"active\", \"note\": \"furiosa healthy.\"}}",
+      "parsed": {
+        "tool": "gt_patrol_report",
+        "args": {
+          "status": "active",
+          "note": "furiosa healthy."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 2355.6637410001713
+    },
+    {
+      "scenario": "stuck_polecat",
+      "description": "Stuck polecat 45min \u2192 should nudge",
+      "output": "{\"tool\": \"gt_nudge\", \"args\": {\"target\": \"gastown/furiosa\", \"message\": \"Are you still working? No progress detected.\"}}",
+      "parsed": {
+        "tool": "gt_nudge",
+        "args": {
+          "target": "gastown/furiosa",
+          "message": "Are you still working? No progress detected."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 3182.5491939962376
+    },
+    {
+      "scenario": "completed_polecat",
+      "description": "Completed polecat, clean git \u2192 nuke, close bead, verify git, or report",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"gastown/refinery\", \"subject\": \"MERGE_READY: bd-8rlwh\", \"body\": \"Polecat furiosa completed bd-8rlwh. Branch merged and pushed. No uncommitted changes..\"}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "gastown/refinery",
+          "subject": "MERGE_READY: bd-8rlwh",
+          "body": "Polecat furiosa completed bd-8rlwh. Branch merged and pushed. No uncommitted changes.."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 4937.0802310004365
+    },
+    {
+      "scenario": "crash_loop",
+      "description": "Crash-looping polecat \u2192 escalate or force nuke",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"RECOVERY: gastown/furiosa crash loop\", \"body\": \"furiosa has crashed 4 times (segfault). Needs intervention.\"}}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "RECOVERY: gastown/furiosa crash loop",
+          "body": "furiosa has crashed 4 times (segfault). Needs intervention."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 4139.2605299988645
+    },
+    {
+      "scenario": "unpushed_work",
+      "description": "Completed but unpushed work \u2192 escalate, NOT nuke",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"RECOVERY_NEEDED: gastown/furiosa has unpushed work\", \"body\": \"3 unpushed commits on feature/fix-auth. DO NOT nuke.\"}}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "RECOVERY_NEEDED: gastown/furiosa has unpushed work",
+          "body": "3 unpushed commits on feature/fix-auth. DO NOT nuke."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 4997.61437500274
+    },
+    {
+      "scenario": "check_infrastructure",
+      "description": "Deacon down (refinery ok) \u2192 should escalate",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"ESCALATION: gastown infrastructure down\", \"body\": \"Both deacon and refinery are down on gastown. Immediate attention required.\"}}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "ESCALATION: gastown infrastructure down",
+          "body": "Both deacon and refinery are down on gastown. Immediate attention required."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 4539.325416997599
+    },
+    {
+      "scenario": "idle_with_mail",
+      "description": "Idle rig with routine mail \u2192 respond or report idle",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"ORPHANED: bead bcc-8rlwh has no polecat\", \"body\": \"Bead bcc-8rlwh is in_progress on branch feature/command-palette but no polecat i",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "ORPHANED: bead bcc-8rlwh has no polecat",
+          "body": "Bead bcc-8rlwh is in_progress on branch feature/command-palette but no polecat is assigned. Needs reassignment."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 6306.07421699824
+    },
+    {
+      "scenario": "polecat_done_inbox",
+      "description": "POLECAT_DONE in inbox \u2192 send MERGE_READY to refinery",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"gastown/refinery\", \"subject\": \"MERGE_READY: bcc-8rlwh\", \"body\": \"Polecat furiosa completed bcc-8rlwh. Branch feature/fix-auth pushed and clean.\"}}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "gastown/refinery",
+          "subject": "MERGE_READY: bcc-8rlwh",
+          "body": "Polecat furiosa completed bcc-8rlwh. Branch feature/fix-auth pushed and clean."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 5263.2625680053025
+    },
+    {
+      "scenario": "lifecycle_shutdown",
+      "description": "Lifecycle shutdown \u2192 verify git state or nuke",
+      "output": "{\"tool\": \"gt_polecat_nuke\", \"args\": {\"target\": \"gastown/nux\"}}",
+      "parsed": {
+        "tool": "gt_polecat_nuke",
+        "args": {
+          "target": "gastown/nux"
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 3067.1334349972312
+    },
+    {
+      "scenario": "merged_notification",
+      "description": "MERGED notification + cleanup wisp \u2192 close cleanup bead",
+      "output": "{\"tool\": \"bd_close\", \"args\": {\"bead_id\": \"bcc-m7j2p\"}}",
+      "parsed": {
+        "tool": "bd_close",
+        "args": {
+          "bead_id": "bcc-m7j2p"
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 2343.9002040031482
+    },
+    {
+      "scenario": "help_request",
+      "description": "HELP request \u2192 escalate to mayor or read details",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"HELP from bcc/rust: Build failing on dependency re\", \"body\": \"Polecat rust needs help: Build failing on dependency resolution. Work",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "HELP from bcc/rust: Build failing on dependency re",
+          "body": "Polecat rust needs help: Build failing on dependency resolution. Working on hq-3mn2."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 4920.262228006322
+    },
+    {
+      "scenario": "zombie_polecat",
+      "description": "Zombie polecat (running state, dead session) \u2192 escalate",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"RECOVERY: zombie polecat gastown/chrome\", \"body\": \"Agent chrome shows running but session bcc-wisp-gb0j5u is dead. Bead zfc-9qw1 ne",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "RECOVERY: zombie polecat gastown/chrome",
+          "body": "Agent chrome shows running but session bcc-wisp-gb0j5u is dead. Bead zfc-9qw1 needs reassignment."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 5325.824152998393
+    },
+    {
+      "scenario": "stale_spawn",
+      "description": "Stale spawn >10min \u2192 escalate",
+      "output": "{\"tool\": \"gt_escalate\", \"args\": {\"severity\": \"HIGH\", \"message\": \"hq/nitro stuck spawning for 20min. Session hq-wisp-2v214 may need restart.\"}}",
+      "parsed": {
+        "tool": "gt_escalate",
+        "args": {
+          "severity": "HIGH",
+          "message": "hq/nitro stuck spawning for 20min. Session hq-wisp-2v214 may need restart."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 3699.0471520039137
+    },
+    {
+      "scenario": "orphaned_bead",
+      "description": "Orphaned bead with no polecat \u2192 notify mayor",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"ORPHANED: bead bcc-8rlwh has no polecat\", \"body\": \"Bead bcc-8rlwh is in_progress on branch integration/beads-ide but no polecat is ",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "ORPHANED: bead bcc-8rlwh has no polecat",
+          "body": "Bead bcc-8rlwh is in_progress on branch integration/beads-ide but no polecat is assigned. Needs reassignment."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 5769.076534998021
+    },
+    {
+      "scenario": "infra_down",
+      "description": "Deacon + refinery both down \u2192 escalate",
+      "output": "{\"tool\": \"gt_mail_send\", \"args\": {\"recipient\": \"mayor/\", \"subject\": \"ESCALATION: gastown infrastructure down\", \"body\": \"Both deacon and refinery are down on gastown. Immediate attention required.\"}}",
+      "parsed": {
+        "tool": "gt_mail_send",
+        "args": {
+          "recipient": "mayor/",
+          "subject": "ESCALATION: gastown infrastructure down",
+          "body": "Both deacon and refinery are down on gastown. Immediate attention required."
+        }
+      },
+      "valid_json": true,
+      "valid_tool": true,
+      "correct_tool": true,
+      "has_args": true,
+      "latency_ms": 3872.1503830020083
+    }
+  ]
+}

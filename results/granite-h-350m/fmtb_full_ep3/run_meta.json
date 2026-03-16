@@ -1,0 +1,15 @@
+{
+  "run_name": "granite-h-350m_fmtb_full_ep3",
+  "model": "ibm-granite/granite-4.0-h-350m",
+  "format": "b",
+  "method": "full",
+  "epochs": 3,
+  "lr": 0.0002,
+  "train_examples": 485,
+  "eval_examples": 22,
+  "train_loss": 0.34601897115264435,
+  "wall_time_seconds": 811.187472820282,
+  "n_params_total": 340332224,
+  "n_params_trainable": 340332224,
+  "inference_latency_ms": 5180.781353003113
+}
