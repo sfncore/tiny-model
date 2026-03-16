@@ -1,13 +1,14 @@
 # Derived data (regenerate with: python curate.py)
 dataset/
 
-# Model weights and checkpoints (large files tracked via Git LFS)
-# checkpoints/ — allow trained model checkpoints
+# Model weights and checkpoints (use HuggingFace, not git)
+checkpoints/
+models/
+*.safetensors
+*.gguf
 *.bin
 *.pt
 *.pth
-
-# Allow .gguf and .safetensors (tracked by LFS via .gitattributes)
 
 # Python
 __pycache__/
