@@ -8,6 +8,7 @@ Replaces the Claude Code witness agent for patrol decisions.
 Usage:
     python serve.py --checkpoint ./checkpoints/smollm2-135m_fmtb_full_ep3_800hardened_v2/
     python serve.py --checkpoint ./checkpoints/... --shadow        # observe only
+    python serve.py --checkpoint ./checkpoints/... --advise        # nudge real witness
     python serve.py --checkpoint ./checkpoints/... --once          # single cycle
     python serve.py --checkpoint ./checkpoints/... --interval 60   # fixed interval
 """
@@ -61,6 +62,9 @@ def model_decide(model, tokenizer, context: str) -> dict:
         messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(prompt, return_tensors="pt")
+    device = next(model.parameters()).device
+    input_len = inputs["input_ids"].shape[1]
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
     start = time.perf_counter()
     with torch.no_grad():
@@ -73,7 +77,7 @@ def model_decide(model, tokenizer, context: str) -> dict:
     latency_ms = (time.perf_counter() - start) * 1000
 
     generated = tokenizer.decode(
-        out[0][inputs.input_ids.shape[1]:],
+        out[0][input_len:],
         skip_special_tokens=True,
     ).strip()
 
@@ -486,7 +490,29 @@ def write_shadow_record(shadow_log_dir: str, rig: str | None, cycle: int,
 # Main patrol loop
 # ---------------------------------------------------------------------------
 
-def patrol_loop(model, tokenizer, *, shadow: bool = False,
+def send_advise_nudge(rig: str, decision: dict):
+    """Send the tiny model's decision as a system-reminder nudge to the real witness."""
+    tool = decision.get("tool", "none")
+    args = decision.get("args", {})
+    latency = decision.get("_latency_ms", 0)
+
+    if tool == "none":
+        return  # Don't nudge for no-ops
+
+    # Build a concise summary of the suggestion
+    args_str = ", ".join(f"{k}={v!r}" for k, v in args.items() if not k.startswith("_"))
+    suggestion = f"{tool}({args_str})" if args_str else tool
+    message = f"[tiny-witness {latency:.0f}ms] suggests: {suggestion}"
+
+    target = f"{rig}/witness"
+    cmd = f"gt nudge --mode=queue {shlex.quote(target)} {shlex.quote(message)}"
+    log.info("Advising %s: %s", target, message)
+    result = run_cmd(cmd, timeout=10)
+    if "[error]" in result:
+        log.warning("Advise nudge failed: %s", result)
+
+
+def patrol_loop(model, tokenizer, *, shadow: bool = False, advise: bool = False,
                 once: bool = False, fixed_interval: int | None = None,
                 rig: str | None = None, shadow_log: str | None = None):
     """Run the patrol loop with exponential backoff."""
@@ -494,8 +520,12 @@ def patrol_loop(model, tokenizer, *, shadow: bool = False,
     cycle = 0
     use_rich = rig is not None
 
-    log.info("Starting patrol loop (shadow=%s, once=%s, interval=%s, rig=%s, rich=%s)",
-             shadow, once, fixed_interval or "adaptive", rig, use_rich)
+    if advise and not rig:
+        log.error("--advise requires --rig to know which witness to nudge")
+        return
+
+    log.info("Starting patrol loop (shadow=%s, advise=%s, once=%s, interval=%s, rig=%s, rich=%s)",
+             shadow, advise, once, fixed_interval or "adaptive", rig, use_rich)
 
     try:
         while True:
@@ -517,14 +547,17 @@ def patrol_loop(model, tokenizer, *, shadow: bool = False,
             log.info("[%s] decision: tool=%s latency=%.0fms", ts, tool, latency)
 
             # 2b. Structured shadow log
-            if shadow and shadow_log:
+            if (shadow or advise) and shadow_log:
                 raw_output = decision.get("_raw", "")
                 write_shadow_record(shadow_log, rig, cycle, context, decision, raw_output)
 
-            # 3. Execute
-            result = execute_tool(decision, shadow=shadow)
-            if result:
-                log.info("[%s] result: %s", ts, result[:200])
+            # 3. Execute or advise
+            if advise:
+                send_advise_nudge(rig, decision)
+            else:
+                result = execute_tool(decision, shadow=shadow)
+                if result:
+                    log.info("[%s] result: %s", ts, result[:200])
 
             # 4. Update state (rich mode only)
             if use_rich:
@@ -564,6 +597,8 @@ def main():
                         help="Rig name for rich context gathering (enables 10-command snapshot)")
     parser.add_argument("--shadow", action="store_true",
                         help="Shadow mode: log decisions but do not execute")
+    parser.add_argument("--advise", action="store_true",
+                        help="Advise mode: nudge real witness with suggestions (requires --rig)")
     parser.add_argument("--shadow-log", type=str, default=None,
                         help="Directory for structured shadow JSONL logs (default: ./shadow_log/)")
     parser.add_argument("--once", action="store_true",
@@ -587,7 +622,11 @@ def main():
     if args.shadow and not shadow_log:
         shadow_log = os.path.join(os.path.dirname(__file__), "shadow_log")
 
-    patrol_loop(model, tokenizer, shadow=args.shadow,
+    # Default shadow log dir when shadow or advise mode is on
+    if args.advise and not shadow_log:
+        shadow_log = os.path.join(os.path.dirname(__file__), "shadow_log")
+
+    patrol_loop(model, tokenizer, shadow=args.shadow, advise=args.advise,
                 once=args.once, fixed_interval=args.interval,
                 rig=args.rig, shadow_log=shadow_log)
 
