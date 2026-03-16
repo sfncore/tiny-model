@@ -13,18 +13,21 @@ log = logging.getLogger(__name__)
 def load_model(checkpoint_path: str):
     """Load model and tokenizer from checkpoint.
 
-    Returns (model, tokenizer) tuple. Model is in eval mode with float32 dtype.
+    Returns (model, tokenizer) tuple. Model is in eval mode, on GPU if available.
     """
     log.info("Loading model from %s", checkpoint_path)
     tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
     model = AutoModelForCausalLM.from_pretrained(
         checkpoint_path,
-        dtype=torch.float32,
+        dtype=dtype,
         trust_remote_code=True,
     )
+    model = model.to(device)
     model.eval()
     n_params = sum(p.numel() for p in model.parameters())
     log.info("Loaded: %.1fM params", n_params / 1e6)

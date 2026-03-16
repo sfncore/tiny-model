@@ -309,6 +309,9 @@ def generate_response(model, tokenizer, messages: list, system_prompt: str,
         full_messages, tokenize=False, add_generation_prompt=True
     )
     inputs = tokenizer(prompt, return_tensors="pt")
+    device = next(model.parameters()).device
+    input_len = inputs["input_ids"].shape[1]
+    inputs = {k: v.to(device) for k, v in inputs.items()}
 
     start = time.perf_counter()
     with torch.no_grad():
@@ -321,7 +324,7 @@ def generate_response(model, tokenizer, messages: list, system_prompt: str,
     latency = (time.perf_counter() - start) * 1000
 
     generated = tokenizer.decode(
-        out[0][inputs.input_ids.shape[1]:],
+        out[0][input_len:],
         skip_special_tokens=True
     )
     return generated.strip(), latency
