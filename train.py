@@ -33,6 +33,7 @@ MODELS = {
     "smollm2-360m": "HuggingFaceTB/SmolLM2-360M-Instruct",
     "qwen3-0.6b": "Qwen/Qwen3-0.6B",
     "granite-350m": "ibm-granite/granite-4.0-350m",
+    "granite-h-350m": "ibm-granite/granite-4.0-h-350m",
 }
 
 
