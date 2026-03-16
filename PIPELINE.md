@@ -28,17 +28,21 @@ pip install tools/llama.cpp/gguf-py/
 
 ## Pipeline Steps
 
-### Step 1: Train (16 min on RTX 3060)
+### Step 1: Train (14 min on RTX 3060)
+
+Requires `mamba-ssm` and `causal-conv1d` packages (efficient Mamba2 CUDA kernels).
+Without them, training OOMs on the naive torch fallback.
 
 ```bash
+TMPDIR=/home/ubuntu/tmp pip install mamba-ssm causal-conv1d  # one-time, needs disk TMPDIR
 .venv/bin/python train.py \
-  --model granite-350m \
+  --model granite-h-350m \
   --format b \
   --epochs 3 \
   --dataset-dir ./dataset/format_b_decisions
 ```
 
-Output: `checkpoints/granite-350m_fmtb_full_ep3/final/`
+Output: `checkpoints/granite-h-350m_fmtb_full_ep3/final/`
 
 The training script automatically copies the original model's config.json and
 tokenizer files into the checkpoint directory. This is required because
@@ -88,21 +92,18 @@ curl -s http://127.0.0.1:8081/v1/chat/completions \
   }'
 ```
 
-### Step 5: Push (optional)
+### Step 5: Push to HuggingFace
+
+Model files are NOT stored in git. Push to HuggingFace:
 
 ```bash
-# To Git (LFS tracks .safetensors and .gguf)
-git add checkpoints/granite-350m_fmtb_full_ep3/final/ models/granite-350m-witness.gguf
-git commit -m "Granite 350M witness: trained + GGUF"
-git push
-
-# To HuggingFace
-HF_TOKEN=<token> .venv/bin/python -c "
+.venv/bin/python -c "
 from huggingface_hub import HfApi
 api = HfApi()
 api.upload_folder(
-    folder_path='checkpoints/granite-350m_fmtb_full_ep3/final',
+    folder_path='checkpoints/granite-h-350m_fmtb_full_ep3/final',
     repo_id='dunks/granite-350m-witness',
+    commit_message='Update model checkpoint',
 )
 "
 ```
@@ -114,7 +115,8 @@ api.upload_folder(
 | `smollm2-135m` | `HuggingFaceTB/SmolLM2-135M-Instruct` | 8K context, too small for general use |
 | `smollm2-360m` | `HuggingFaceTB/SmolLM2-360M-Instruct` | |
 | `qwen3-0.6b` | `Qwen/Qwen3-0.6B` | 32K context, standard transformer |
-| `granite-350m` | `ibm-granite/granite-4.0-350m` | 32K context, hybrid MoE, best results |
+| `granite-350m` | `ibm-granite/granite-4.0-350m` | 32K context, hybrid Mamba2 |
+| `granite-h-350m` | `ibm-granite/granite-4.0-h-350m` | 128K context, hybrid Mamba2, **current winner** |
 
 ## Known Issues
 
