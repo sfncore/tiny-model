@@ -24,6 +24,12 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
+# --- Configurable limits via environment ---
+MAX_TOKENS_CAP = int(os.environ.get("TM_MAX_TOKENS_CAP", "2048"))
+MAX_TOKENS_DEFAULT = int(os.environ.get("TM_MAX_TOKENS_DEFAULT", "512"))
+MAX_PROMPT_LENGTH = int(os.environ.get("TM_MAX_PROMPT_LENGTH", "8192"))
+INFERENCE_TIMEOUT = float(os.environ.get("TM_INFERENCE_TIMEOUT", "30.0"))
+
 app = FastAPI()
 
 # --- Request validation config (env-configurable) ---
@@ -103,6 +109,8 @@ def run_inference(model_name: str, messages: list, max_tokens: int, temperature:
             pad_token_id=tokenizer.pad_token_id,
         )
     latency = time.perf_counter() - start
+    if latency > INFERENCE_TIMEOUT:
+        raise TimeoutError(f"Inference took {latency:.1f}s (limit: {INFERENCE_TIMEOUT}s)")
     generated = tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
     completion_tokens = len(out[0]) - input_len
 
@@ -119,7 +127,7 @@ def list_models():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    # --- Parse body ---
+    # --- Request parsing with error handling ---
     try:
         body = await request.json()
     except Exception:
@@ -132,8 +140,14 @@ async def chat_completions(request: Request):
             "error": {"message": "Request body must be a JSON object", "type": "invalid_request_error"}
         })
 
+    # --- Empty MODELS check ---
+    if not MODELS:
+        return JSONResponse(status_code=503, content={
+            "error": {"message": "No models loaded. Service unavailable.", "type": "server_error"}
+        })
+
     # --- Validate messages ---
-    req_messages = body.get("messages")
+    req_messages = body.get("messages", [])
     if not isinstance(req_messages, list) or len(req_messages) == 0:
         return JSONResponse(status_code=400, content={
             "error": {"message": "'messages' must be a non-empty array", "type": "invalid_request_error"}
@@ -146,7 +160,7 @@ async def chat_completions(request: Request):
             })
 
     # --- Validate and cap max_tokens ---
-    req_max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or 512
+    req_max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or MAX_TOKENS_DEFAULT
     if not isinstance(req_max_tokens, int) or req_max_tokens < 1:
         return JSONResponse(status_code=400, content={
             "error": {"message": "'max_tokens' must be a positive integer", "type": "invalid_request_error"}
@@ -173,14 +187,20 @@ async def chat_completions(request: Request):
     messages = [
         {"role": m.get("role", "user"), "content": normalize_content(m.get("content"))}
         for m in req_messages
+        if isinstance(m, dict)
     ]
 
-    # --- Validate prompt length ---
-    prompt_text = " ".join(m["content"] for m in messages)
-    if len(prompt_text) > MAX_PROMPT_LENGTH:
+    if not messages:
+        return JSONResponse(status_code=400, content={
+            "error": {"message": "No valid messages after filtering", "type": "invalid_request_error"}
+        })
+
+    # --- Input prompt length validation ---
+    total_chars = sum(len(m["content"]) for m in messages)
+    if total_chars > MAX_PROMPT_LENGTH:
         return JSONResponse(status_code=400, content={
             "error": {
-                "message": f"Prompt too long ({len(prompt_text)} chars). Maximum is {MAX_PROMPT_LENGTH}.",
+                "message": f"Combined prompt length ({total_chars}) exceeds limit ({MAX_PROMPT_LENGTH})",
                 "type": "invalid_request_error",
             }
         })
@@ -193,6 +213,10 @@ async def chat_completions(request: Request):
         future.cancel()
         return JSONResponse(status_code=504, content={
             "error": {"message": f"Inference timed out after {INFERENCE_TIMEOUT}s", "type": "server_error"}
+        })
+    except Exception as e:
+        return JSONResponse(status_code=500, content={
+            "error": {"message": f"Inference error: {type(e).__name__}", "type": "server_error"}
         })
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"

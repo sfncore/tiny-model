@@ -27,6 +27,7 @@ import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 
 from snapshot_format import format_snapshot
+from shared import load_model
 
 SYSTEM_PROMPT = """You are a Witness agent. You respond ONLY with JSON tool calls.
 
@@ -45,25 +46,8 @@ log = logging.getLogger("witness-shim")
 
 
 # ---------------------------------------------------------------------------
-# Model loading & inference (from evaluate.py)
+# Model loading & inference
 # ---------------------------------------------------------------------------
-
-def load_model(checkpoint_path: str):
-    """Load model and tokenizer from checkpoint."""
-    log.info("Loading model from %s", checkpoint_path)
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        dtype=torch.float32,
-        trust_remote_code=True,
-    )
-    model.eval()
-    n_params = sum(p.numel() for p in model.parameters())
-    log.info("Loaded: %.1fM params", n_params / 1e6)
-    return model, tokenizer
 
 
 def model_decide(model, tokenizer, context: str) -> dict:
@@ -264,6 +248,62 @@ def gather_patrol_context_rich(rig: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Bash tool security
+# ---------------------------------------------------------------------------
+
+BASH_ALLOWED_COMMANDS = {"git", "tmux", "bd", "gt"}
+BASH_MAX_LENGTH = 1024
+BASH_FORBIDDEN_METACHAR = re.compile(r'[;|&`$(){}]')
+
+
+def _validate_bash_command(command: str) -> str | None:
+    """Validate a bash command against the allowlist and security rules.
+
+    Returns None if valid, or an error message string if rejected.
+    """
+    if not command or not command.strip():
+        return "empty command"
+    if len(command) > BASH_MAX_LENGTH:
+        return f"command too long ({len(command)} > {BASH_MAX_LENGTH})"
+    if BASH_FORBIDDEN_METACHAR.search(command):
+        return f"forbidden shell metacharacter in command"
+    try:
+        parts = shlex.split(command)
+    except ValueError as e:
+        return f"malformed command: {e}"
+    binary = os.path.basename(parts[0]) if parts else ""
+    if binary not in BASH_ALLOWED_COMMANDS:
+        return f"command '{binary}' not in allowlist {BASH_ALLOWED_COMMANDS}"
+    return None
+
+
+def _execute_bash_tool(command: str, shadow: bool = False) -> str:
+    """Execute a validated bash command securely (shell=False)."""
+    error = _validate_bash_command(command)
+    if error:
+        log.warning("Bash tool REJECTED: %s — %s", command[:100], error)
+        return f"[rejected] {error}"
+
+    parts = shlex.split(command)
+    if shadow:
+        log.info("[SHADOW] Would run bash: %s", command[:200])
+        return f"[shadow] {command}"
+
+    log.info("Bash tool executing: %s", command[:200])
+    try:
+        r = subprocess.run(
+            parts, shell=False, capture_output=True, text=True, timeout=30,
+        )
+        result = r.stdout.strip() if r.returncode == 0 else f"[error] {r.stderr.strip()}"
+    except subprocess.TimeoutExpired:
+        result = "[error] command timed out"
+    except FileNotFoundError:
+        result = f"[error] command not found: {parts[0]}"
+    log.info("Bash tool result: %s", result[:200])
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Tool execution
 # ---------------------------------------------------------------------------
 
@@ -271,6 +311,10 @@ def execute_tool(decision: dict, shadow: bool = False) -> str:
     """Map a tool-call dict to a gt CLI command and execute it."""
     tool = decision.get("tool", "none")
     args = decision.get("args", {})
+
+    # Route bash tool to secure handler (bypasses _build_command + run_cmd)
+    if tool == "bash":
+        return _execute_bash_tool(args.get("command", ""), shadow=shadow)
 
     cmd = _build_command(tool, args)
     if cmd is None:
@@ -285,6 +329,18 @@ def execute_tool(decision: dict, shadow: bool = False) -> str:
     result = run_cmd(cmd, timeout=30)
     log.info("Result: %s", result[:200])
     return result
+
+
+# Tmux session names: alphanumeric, hyphens, underscores, dots, slashes, max 128 chars.
+_TMUX_TARGET_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9._/-]{0,127}$")
+
+
+def _valid_tmux_target(session: str) -> bool:
+    """Validate tmux target session name against allowlist pattern."""
+    if not _TMUX_TARGET_RE.match(session):
+        log.warning("Rejected invalid tmux target: %r", session[:80])
+        return False
+    return True
 
 
 def _build_command(tool: str, args: dict) -> str | None:
@@ -352,7 +408,7 @@ def _build_command(tool: str, args: dict) -> str | None:
 
     if tool == "check_tmux_session":
         session = args.get("session", "")
-        if not session:
+        if not session or not _valid_tmux_target(session):
             return None
         return f"tmux has-session -t {shlex.quote(session)}"
 
@@ -379,14 +435,12 @@ def _build_command(tool: str, args: dict) -> str | None:
     if tool == "check_git_state":
         session = args.get("session", "")
         if session:
+            if not _valid_tmux_target(session):
+                return "git status"
             return f"tmux send-keys -t {shlex.quote(session)} 'git status' Enter"
         return "git status"
 
-    if tool == "bash":
-        command = args.get("command", "")
-        if not command:
-            return None
-        return command
+    # bash tool is handled by _execute_bash_tool via execute_tool — never reaches here
 
     log.warning("Unknown tool: %s", tool)
     return None

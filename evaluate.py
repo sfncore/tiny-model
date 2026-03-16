@@ -16,13 +16,13 @@ Usage:
 import argparse
 import json
 import os
-import re
 import time
 import torch
 from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from snapshot_format import format_snapshot
+from shared import load_model
 
 
 VALID_TOOLS = {
@@ -299,23 +299,6 @@ SCENARIOS_RICH = [
 SCENARIOS = SCENARIOS_RICH
 
 
-def load_model(checkpoint_path: str):
-    """Load model and tokenizer from checkpoint."""
-    print(f"Loading model from {checkpoint_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    model = AutoModelForCausalLM.from_pretrained(
-        checkpoint_path,
-        dtype=torch.float32,
-        trust_remote_code=True,
-    )
-    model.eval()
-    n_params = sum(p.numel() for p in model.parameters())
-    print(f"Loaded: {n_params/1e6:.1f}M params")
-    return model, tokenizer
-
 
 def generate_response(model, tokenizer, messages: list, system_prompt: str,
                       max_new_tokens: int = 150) -> tuple:
@@ -344,6 +327,24 @@ def generate_response(model, tokenizer, messages: list, system_prompt: str,
     return generated.strip(), latency
 
 
+def _extract_json_balanced(text: str) -> dict | None:
+    """Extract a JSON object using balanced brace matching."""
+    for i, ch in enumerate(text):
+        if ch == '{':
+            depth = 0
+            for j in range(i, len(text)):
+                if text[j] == '{':
+                    depth += 1
+                elif text[j] == '}':
+                    depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[i:j+1])
+                    except json.JSONDecodeError:
+                        break  # This opening brace didn't work, try next
+    return None
+
+
 def parse_json_output(text: str) -> dict | None:
     """Try to extract a JSON object from model output."""
     # Try direct parse first
@@ -352,23 +353,8 @@ def parse_json_output(text: str) -> dict | None:
     except json.JSONDecodeError:
         pass
 
-    # Try to find JSON in the text
-    match = re.search(r'\{[^{}]*\}', text)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    # Try to find nested JSON (tool calls with args)
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        try:
-            return json.loads(match.group())
-        except json.JSONDecodeError:
-            pass
-
-    return None
+    # Use balanced brace matching to handle nested objects
+    return _extract_json_balanced(text)
 
 
 def evaluate_scenarios(model, tokenizer, system_prompt: str) -> dict:
@@ -432,20 +418,20 @@ def evaluate_eval_set(model, tokenizer, eval_path: str, system_prompt: str,
     total_turns = 0
 
     for i, conv in enumerate(eval_convs):
-        # Find user messages (skip system) and get the model to respond
-        user_msgs = []
+        # Build conversation context and evaluate all assistant turns
+        messages = []
         for m in conv:
             if m["role"] == "system":
                 continue
             elif m["role"] == "user":
-                user_msgs.append(m)
+                messages.append(m)
             elif m["role"] == "assistant":
                 # This is a turn we can evaluate
-                if not user_msgs:
+                if not messages:
                     continue
 
                 output, latency = generate_response(
-                    model, tokenizer, user_msgs, system_prompt
+                    model, tokenizer, messages, system_prompt
                 )
                 latencies.append(latency)
 
@@ -459,8 +445,8 @@ def evaluate_eval_set(model, tokenizer, eval_path: str, system_prompt: str,
                         correct_schema_count += 1
 
                 total_turns += 1
-                # Only evaluate first assistant turn per conversation for speed
-                break
+                # Add actual assistant message to maintain conversation context
+                messages.append(m)
 
         if (i + 1) % 10 == 0:
             print(f"  Processed {i+1}/{len(eval_convs)} conversations...")
@@ -475,7 +461,7 @@ def evaluate_eval_set(model, tokenizer, eval_path: str, system_prompt: str,
         "correct_schema_rate": correct_schema_count / max(total_turns, 1),
         "mean_latency_ms": sum(latencies) / max(len(latencies), 1),
         "p50_latency_ms": sorted(latencies)[len(latencies) // 2] if latencies else 0,
-        "p95_latency_ms": sorted(latencies)[int(len(latencies) * 0.95)] if latencies else 0,
+        "p95_latency_ms": sorted(latencies)[min(int(len(latencies) * 0.95), len(latencies) - 1)] if latencies else 0,
     }
 
 

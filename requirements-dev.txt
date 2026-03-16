@@ -1,0 +1,8 @@
+# Development/training dependencies for tiny_model
+# Includes all runtime dependencies
+-r requirements.txt
+
+# Training (train.py)
+datasets>=4.7.0
+trl>=0.29.0
+peft>=0.18.1

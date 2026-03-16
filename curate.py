@@ -19,6 +19,8 @@ import random
 from pathlib import Path
 from typing import Optional
 
+from shared import find_session_files
+
 # -------------------------------------------------------------------
 # Tool call mapping: maps raw bash commands to structured tool calls
 # -------------------------------------------------------------------
@@ -596,16 +598,6 @@ def to_openai_format(messages: list) -> dict:
 # Main pipeline
 # -------------------------------------------------------------------
 
-def find_session_files(session_dirs: list, min_size: int = 5000, max_size: int = 2_000_000) -> list:
-    """Find all witness session files within size bounds."""
-    files = []
-    for d in session_dirs:
-        d = os.path.expanduser(d)
-        for path in glob.glob(os.path.join(d, "*.jsonl")):
-            size = os.path.getsize(path)
-            if min_size <= size <= max_size:
-                files.append(path)
-    return sorted(files)
 
 
 def process_session(path: str) -> Optional[dict]:
@@ -631,6 +623,44 @@ def process_session(path: str) -> Optional[dict]:
     except Exception as e:
         print(f"  ERROR processing {path}: {e}", file=sys.stderr)
         return None
+
+
+def _content_hash(messages: list) -> str:
+    """Generate a content-based hash for a conversation's messages.
+
+    Uses the concatenation of all user inputs and assistant outputs to detect
+    duplicates regardless of metadata differences.
+    """
+    h = hashlib.sha256()
+    for m in messages:
+        role = m.get("role", "")
+        content = m.get("content", "") or ""
+        h.update(role.encode())
+        h.update(content.encode())
+        if "tool_calls" in m:
+            for tc in m["tool_calls"]:
+                fn = tc.get("function", {})
+                h.update(fn.get("name", "").encode())
+                h.update(fn.get("arguments", "").encode())
+    return h.hexdigest()
+
+
+def deduplicate_examples(curated: list) -> tuple:
+    """Remove exact duplicate conversations based on content hash.
+
+    Returns (deduplicated_list, stats_dict).
+    """
+    seen = {}
+    unique = []
+    dupes_removed = 0
+    for c in curated:
+        h = _content_hash(c["messages"])
+        if h not in seen:
+            seen[h] = True
+            unique.append(c)
+        else:
+            dupes_removed += 1
+    return unique, {"exact_dupes_removed": dupes_removed}
 
 
 def main():
@@ -712,6 +742,18 @@ def main():
     if args.stats_only:
         return
 
+    # Deduplicate across train/eval splits using content hash
+    pre_dedup_count = len(curated)
+    curated, dedup_stats = deduplicate_examples(curated)
+    print(f"\nDeduplication:")
+    print(f"  Before:           {pre_dedup_count}")
+    print(f"  After:            {len(curated)}")
+    print(f"  Exact duplicates: {dedup_stats['exact_dupes_removed']}")
+
+    if not curated:
+        print("No sessions remain after deduplication!")
+        return
+
     # Split train/eval
     random.seed(args.seed)
     random.shuffle(curated)
@@ -719,7 +761,15 @@ def main():
     train = curated[:split_idx]
     eval_set = curated[split_idx:]
 
+    # Cross-split dedup: ensure no example in eval has the same content hash as any in train
+    train_hashes = {_content_hash(c["messages"]) for c in train}
+    eval_before = len(eval_set)
+    eval_set = [c for c in eval_set if _content_hash(c["messages"]) not in train_hashes]
+    cross_split_dupes = eval_before - len(eval_set)
+
     print(f"\nSplit: {len(train)} train, {len(eval_set)} eval")
+    if cross_split_dupes > 0:
+        print(f"  Cross-split duplicates removed from eval: {cross_split_dupes}")
 
     # Write output
     os.makedirs(args.output_dir, exist_ok=True)
@@ -755,6 +805,11 @@ def main():
         "total_witness_tool_calls": total_tool_calls,
         "action_distribution": all_actions,
         "session_dirs": [str(d) for d in args.session_dir],
+        "dedup": {
+            "pre_dedup_count": pre_dedup_count,
+            "exact_dupes_removed": dedup_stats["exact_dupes_removed"],
+            "cross_split_dupes_removed": cross_split_dupes,
+        },
     }
     with open(os.path.join(args.output_dir, "metadata.json"), "w") as f:
         json.dump(metadata, f, indent=2)

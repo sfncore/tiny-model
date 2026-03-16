@@ -1,0 +1,8 @@
+# Runtime dependencies for tiny_model
+# Core inference and serving
+torch>=2.10.0
+transformers>=5.3.0
+
+# API server (api_server.py)
+fastapi>=0.115.0
+uvicorn>=0.41.0

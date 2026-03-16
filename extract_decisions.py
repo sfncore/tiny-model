@@ -133,10 +133,10 @@ def extract_decision_pairs(conv: list, max_context_turns: int = 8) -> list:
                     pair.append({"role": "assistant", "content": format_b})
                     pairs.append(pair)
 
-            # Add assistant text to context if it has content
-            content = build_context_message(m)
-            if content.strip():
-                context_messages.append({"role": "assistant", "content": content})
+            # NOTE: Do NOT add assistant outputs to context_messages.
+            # At inference time (serve.py), the model only sees system + user
+            # context per cycle — it never sees its own previous outputs.
+            # Including them here would create a train/serve mismatch.
 
     return pairs
 
@@ -184,9 +184,7 @@ def extract_none_pairs(conv: list, max_context_turns: int = 8) -> list:
                     pairs.append(pair)
                     return pairs  # Only one per conversation
 
-            content = build_context_message(m)
-            if content.strip():
-                context_messages.append({"role": "assistant", "content": content})
+            # Do NOT add assistant outputs to context — see extract_decision_pairs
 
     return pairs
 
@@ -299,5 +297,65 @@ def main():
     print(f"\nNote: pass the output dir as dataset-dir.")
 
 
+def validate_context_parity(pairs: list) -> list[str]:
+    """
+    Validate that training examples only contain context available at inference time.
+
+    At inference, serve.py builds: [system_prompt, {"role": "user", "content": context}]
+    So training context (everything before the final assistant turn) must only contain
+    system and user roles — no assistant messages should appear in the context.
+
+    Returns a list of error strings (empty = valid).
+    """
+    errors = []
+    for i, pair in enumerate(pairs):
+        # Context = all messages except the last (which is the assistant decision)
+        context = pair[:-1]
+        for j, msg in enumerate(context):
+            if msg["role"] == "assistant":
+                tool_preview = msg.get("content", "")[:80]
+                errors.append(
+                    f"Pair {i}, msg {j}: assistant message in context "
+                    f"(train/serve mismatch): {tool_preview!r}"
+                )
+    return errors
+
+
+def _self_test():
+    """Verify extraction produces no train/serve context mismatch."""
+    # Simulate a multi-turn conversation where assistant outputs should NOT
+    # leak into subsequent training examples' context
+    conversation = [
+        {"role": "system", "content": "You are a Witness agent."},
+        {"role": "user", "content": "Patrol cycle 1: polecat furiosa idle 30m"},
+        {"role": "assistant", "content": json.dumps({"tool": "gt_nudge", "args": {"target": "furiosa", "message": "status?"}})},
+        {"role": "tool", "content": "Nudge sent to furiosa"},
+        {"role": "user", "content": "Patrol cycle 2: furiosa still idle 45m"},
+        {"role": "assistant", "content": json.dumps({"tool": "gt_polecat_nuke", "args": {"name": "furiosa"}})},
+    ]
+
+    pairs = extract_decision_pairs(conversation, max_context_turns=8)
+    assert len(pairs) == 2, f"Expected 2 pairs, got {len(pairs)}"
+
+    # Validate no assistant messages in context
+    errors = validate_context_parity(pairs)
+    assert not errors, f"Context parity errors:\n" + "\n".join(errors)
+
+    # Verify second pair's context doesn't include the first assistant output
+    second_pair_context = second_pair = pairs[1][:-1]  # everything except final assistant turn
+    context_roles = [m["role"] for m in second_pair_context]
+    assert "assistant" not in context_roles, (
+        f"Assistant role leaked into context: {context_roles}"
+    )
+
+    print("PASS: All context parity checks passed")
+    print(f"  Pair 1 context roles: {[m['role'] for m in pairs[0][:-1]]}")
+    print(f"  Pair 2 context roles: {[m['role'] for m in pairs[1][:-1]]}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+        _self_test()
+    else:
+        main()

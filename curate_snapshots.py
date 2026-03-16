@@ -30,6 +30,7 @@ import sys
 from collections import Counter
 from typing import Optional
 
+from shared import find_session_files
 from snapshot_format import (
     format_snapshot,
     is_gather_command,
@@ -192,17 +193,6 @@ def pairs_to_training(pairs: list) -> list:
     return examples
 
 
-def find_session_files(session_dirs: list, min_size: int = 5000,
-                       max_size: int = 2_000_000) -> list:
-    """Find all witness session JSONL files within size bounds."""
-    files = []
-    for d in session_dirs:
-        d = os.path.expanduser(d)
-        for path in glob.glob(os.path.join(d, "*.jsonl")):
-            size = os.path.getsize(path)
-            if min_size <= size <= max_size:
-                files.append(path)
-    return sorted(files)
 
 
 def main():
