@@ -1,0 +1,26 @@
+# Tiny Model Server Configuration
+# Usage: python api_server.py --config serve.yaml
+
+server:
+  host: 127.0.0.1
+  port: 8081
+
+inference:
+  max_tokens_cap: 2048
+  max_tokens_default: 512
+  max_prompt_length: 8192
+  timeout_seconds: 30
+
+models:
+  witness:
+    path: checkpoints/granite-h-350m_fmtb_full_ep3/final
+    enabled: true
+    default: true
+
+  # Base models — disabled by default to save memory
+  # granite-base:
+  #   path: ibm-granite/granite-4.0-h-350m
+  #   enabled: false
+  # smollm2-base:
+  #   path: HuggingFaceTB/SmolLM2-135M-Instruct
+  #   enabled: false

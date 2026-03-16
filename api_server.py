@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
 """
-Lightweight OpenAI-compatible API server for SmolLM2 models.
-Serves both trained (witness) and untrained (base) models.
+Lightweight OpenAI-compatible API server for tiny witness models.
 Supports streaming (SSE) and non-streaming responses.
 
 Usage:
-    python api_server.py                          # default: both models on port 8080
-    python api_server.py --port 8080
-    python api_server.py --base-only
-    python api_server.py --witness-only
+    python api_server.py                        # uses serve.yaml
+    python api_server.py --config custom.yaml   # custom config
+    python api_server.py --model witness        # override: load only 'witness'
 """
 
 import argparse
@@ -17,44 +15,52 @@ import os
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
+from pathlib import Path
 
 import torch
 import uvicorn
+import yaml
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from transformers import AutoTokenizer, AutoModelForCausalLM
-
-# --- Configurable limits via environment ---
-MAX_TOKENS_CAP = int(os.environ.get("TM_MAX_TOKENS_CAP", "2048"))
-MAX_TOKENS_DEFAULT = int(os.environ.get("TM_MAX_TOKENS_DEFAULT", "512"))
-MAX_PROMPT_LENGTH = int(os.environ.get("TM_MAX_PROMPT_LENGTH", "8192"))
-INFERENCE_TIMEOUT = float(os.environ.get("TM_INFERENCE_TIMEOUT", "30.0"))
 
 app = FastAPI()
 
-# --- Request validation config (env-configurable) ---
-MAX_TOKENS_CAP = int(os.environ.get("TM_MAX_TOKENS_CAP", "2048"))
-MAX_PROMPT_LENGTH = int(os.environ.get("TM_MAX_PROMPT_LENGTH", "8192"))
-INFERENCE_TIMEOUT = int(os.environ.get("TM_INFERENCE_TIMEOUT", "120"))
-
+# Global state
+MODELS = {}
+CONFIG = {}
 _inference_pool = ThreadPoolExecutor(max_workers=1)
 
-MODELS = {}
 
-BASE_MODELS = {
-    "smollm2-base": "HuggingFaceTB/SmolLM2-135M-Instruct",
-    "granite-base": "ibm-granite/granite-4.0-350m",
-}
-WITNESS_CHECKPOINT = "./checkpoints/smollm2-135m_fmtb_full_ep3/final"
+def load_config(config_path: str) -> dict:
+    """Load and validate serve.yaml config."""
+    with open(config_path) as f:
+        cfg = yaml.safe_load(f)
+
+    # Defaults
+    cfg.setdefault("server", {})
+    cfg["server"].setdefault("host", "127.0.0.1")
+    cfg["server"].setdefault("port", 8081)
+
+    cfg.setdefault("inference", {})
+    cfg["inference"].setdefault("max_tokens_cap", 2048)
+    cfg["inference"].setdefault("max_tokens_default", 512)
+    cfg["inference"].setdefault("max_prompt_length", 8192)
+    cfg["inference"].setdefault("timeout_seconds", 30)
+
+    cfg.setdefault("models", {})
+    return cfg
 
 
 def load_model(name: str, path: str, device: str):
+    """Load a model onto the specified device."""
+    from transformers import AutoTokenizer, AutoModelForCausalLM
+
     print(f"Loading {name} from {path}...")
     tokenizer = AutoTokenizer.from_pretrained(path, trust_remote_code=True)
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
     model = AutoModelForCausalLM.from_pretrained(
-        path, torch_dtype=torch.bfloat16, trust_remote_code=True
+        path, dtype=torch.bfloat16, trust_remote_code=True
     )
     model.to(device).eval()
     n_params = sum(p.numel() for p in model.parameters())
@@ -83,6 +89,10 @@ def resolve_model(name: str) -> str | None:
     for k in MODELS:
         if name in k or k in name:
             return k
+    # Return default model (first one, or the one marked default in config)
+    default = CONFIG.get("_default_model")
+    if default and default in MODELS:
+        return default
     return list(MODELS.keys())[0]
 
 
@@ -99,6 +109,8 @@ def run_inference(model_name: str, messages: list, max_tokens: int, temperature:
     input_len = inputs["input_ids"].shape[1]
     inputs = {k: v.to(device) for k, v in inputs.items()}
 
+    timeout = CONFIG.get("inference", {}).get("timeout_seconds", 30)
+
     start = time.perf_counter()
     with torch.no_grad():
         out = model.generate(
@@ -109,8 +121,8 @@ def run_inference(model_name: str, messages: list, max_tokens: int, temperature:
             pad_token_id=tokenizer.pad_token_id,
         )
     latency = time.perf_counter() - start
-    if latency > INFERENCE_TIMEOUT:
-        raise TimeoutError(f"Inference took {latency:.1f}s (limit: {INFERENCE_TIMEOUT}s)")
+    if latency > timeout:
+        raise TimeoutError(f"Inference took {latency:.1f}s (limit: {timeout}s)")
     generated = tokenizer.decode(out[0][input_len:], skip_special_tokens=True).strip()
     completion_tokens = len(out[0]) - input_len
 
@@ -127,7 +139,12 @@ def list_models():
 
 @app.post("/v1/chat/completions")
 async def chat_completions(request: Request):
-    # --- Request parsing with error handling ---
+    inf = CONFIG.get("inference", {})
+    max_tokens_cap = inf.get("max_tokens_cap", 2048)
+    max_tokens_default = inf.get("max_tokens_default", 512)
+    max_prompt_length = inf.get("max_prompt_length", 8192)
+    timeout = inf.get("timeout_seconds", 30)
+
     try:
         body = await request.json()
     except Exception:
@@ -140,13 +157,11 @@ async def chat_completions(request: Request):
             "error": {"message": "Request body must be a JSON object", "type": "invalid_request_error"}
         })
 
-    # --- Empty MODELS check ---
     if not MODELS:
         return JSONResponse(status_code=503, content={
-            "error": {"message": "No models loaded. Service unavailable.", "type": "server_error"}
+            "error": {"message": "No models loaded.", "type": "server_error"}
         })
 
-    # --- Validate messages ---
     req_messages = body.get("messages", [])
     if not isinstance(req_messages, list) or len(req_messages) == 0:
         return JSONResponse(status_code=400, content={
@@ -156,67 +171,58 @@ async def chat_completions(request: Request):
     for i, m in enumerate(req_messages):
         if not isinstance(m, dict) or "role" not in m:
             return JSONResponse(status_code=400, content={
-                "error": {"message": f"messages[{i}] must be an object with a 'role' field", "type": "invalid_request_error"}
+                "error": {"message": f"messages[{i}] must have a 'role' field", "type": "invalid_request_error"}
             })
 
-    # --- Validate and cap max_tokens ---
-    req_max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or MAX_TOKENS_DEFAULT
+    req_max_tokens = body.get("max_tokens") or body.get("max_completion_tokens") or max_tokens_default
     if not isinstance(req_max_tokens, int) or req_max_tokens < 1:
         return JSONResponse(status_code=400, content={
             "error": {"message": "'max_tokens' must be a positive integer", "type": "invalid_request_error"}
         })
-    req_max_tokens = min(req_max_tokens, MAX_TOKENS_CAP)
+    req_max_tokens = min(req_max_tokens, max_tokens_cap)
 
-    # --- Validate temperature ---
     req_temperature = body.get("temperature", 0.0)
     if not isinstance(req_temperature, (int, float)) or req_temperature < 0:
         return JSONResponse(status_code=400, content={
-            "error": {"message": "'temperature' must be a non-negative number", "type": "invalid_request_error"}
+            "error": {"message": "'temperature' must be non-negative", "type": "invalid_request_error"}
         })
 
     req_stream = body.get("stream", False)
 
-    # --- Check models available ---
-    req_model = body.get("model", "smollm2-witness")
+    req_model = body.get("model", CONFIG.get("_default_model", "witness"))
     model_name = resolve_model(req_model)
     if model_name is None:
         return JSONResponse(status_code=503, content={
-            "error": {"message": "No models are currently loaded", "type": "server_error"}
+            "error": {"message": "No models loaded", "type": "server_error"}
         })
 
     messages = [
         {"role": m.get("role", "user"), "content": normalize_content(m.get("content"))}
-        for m in req_messages
-        if isinstance(m, dict)
+        for m in req_messages if isinstance(m, dict)
     ]
 
     if not messages:
         return JSONResponse(status_code=400, content={
-            "error": {"message": "No valid messages after filtering", "type": "invalid_request_error"}
+            "error": {"message": "No valid messages", "type": "invalid_request_error"}
         })
 
-    # --- Input prompt length validation ---
     total_chars = sum(len(m["content"]) for m in messages)
-    if total_chars > MAX_PROMPT_LENGTH:
+    if total_chars > max_prompt_length:
         return JSONResponse(status_code=400, content={
-            "error": {
-                "message": f"Combined prompt length ({total_chars}) exceeds limit ({MAX_PROMPT_LENGTH})",
-                "type": "invalid_request_error",
-            }
+            "error": {"message": f"Prompt too long ({total_chars} > {max_prompt_length})", "type": "invalid_request_error"}
         })
 
-    # --- Run inference with timeout ---
     try:
         future = _inference_pool.submit(run_inference, model_name, messages, req_max_tokens, req_temperature)
-        generated, input_len, completion_tokens, latency = future.result(timeout=INFERENCE_TIMEOUT)
+        generated, input_len, completion_tokens, latency = future.result(timeout=timeout)
     except FuturesTimeoutError:
         future.cancel()
         return JSONResponse(status_code=504, content={
-            "error": {"message": f"Inference timed out after {INFERENCE_TIMEOUT}s", "type": "server_error"}
+            "error": {"message": f"Inference timed out ({timeout}s)", "type": "server_error"}
         })
     except Exception as e:
         return JSONResponse(status_code=500, content={
-            "error": {"message": f"Inference error: {type(e).__name__}", "type": "server_error"}
+            "error": {"message": f"Inference error: {type(e).__name__}: {e}", "type": "server_error"}
         })
 
     chat_id = f"chatcmpl-{uuid.uuid4().hex[:12]}"
@@ -224,88 +230,68 @@ async def chat_completions(request: Request):
 
     if req_stream:
         def stream_response():
-            # Single chunk with full content (model is too small for real token streaming)
             chunk = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": {"role": "assistant", "content": generated},
-                    "finish_reason": None,
-                }],
+                "id": chat_id, "object": "chat.completion.chunk",
+                "created": created, "model": model_name,
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": generated}, "finish_reason": None}],
             }
             yield f"data: {json.dumps(chunk)}\n\n"
-
-            # Final chunk with finish_reason
             done_chunk = {
-                "id": chat_id,
-                "object": "chat.completion.chunk",
-                "created": created,
-                "model": model_name,
-                "choices": [{
-                    "index": 0,
-                    "delta": {},
-                    "finish_reason": "stop",
-                }],
+                "id": chat_id, "object": "chat.completion.chunk",
+                "created": created, "model": model_name,
+                "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             }
             if body.get("stream_options", {}).get("include_usage"):
-                done_chunk["usage"] = {
-                    "prompt_tokens": input_len,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": input_len + completion_tokens,
-                }
+                done_chunk["usage"] = {"prompt_tokens": input_len, "completion_tokens": completion_tokens, "total_tokens": input_len + completion_tokens}
             yield f"data: {json.dumps(done_chunk)}\n\n"
             yield "data: [DONE]\n\n"
-
         return StreamingResponse(stream_response(), media_type="text/event-stream")
 
     return {
-        "id": chat_id,
-        "object": "chat.completion",
-        "created": created,
-        "model": model_name,
-        "choices": [{
-            "index": 0,
-            "message": {"role": "assistant", "content": generated},
-            "finish_reason": "stop",
-        }],
-        "usage": {
-            "prompt_tokens": input_len,
-            "completion_tokens": completion_tokens,
-            "total_tokens": input_len + completion_tokens,
-        },
+        "id": chat_id, "object": "chat.completion", "created": created, "model": model_name,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": generated}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": input_len, "completion_tokens": completion_tokens, "total_tokens": input_len + completion_tokens},
     }
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--port", type=int, default=8080)
-    parser.add_argument("--host", type=str, default="127.0.0.1")
-    parser.add_argument("--models", type=str, default="all",
-                        help="Comma-separated model names to load (e.g. 'granite-base,smollm2-base') or 'all'")
-    parser.add_argument("--witness-checkpoint", type=str, default=WITNESS_CHECKPOINT)
+    parser = argparse.ArgumentParser(description="Tiny model API server")
+    parser.add_argument("--config", type=str, default="serve.yaml", help="Path to serve.yaml config")
+    parser.add_argument("--model", type=str, default=None, help="Override: load only this model name from config")
+    parser.add_argument("--port", type=int, default=None, help="Override server port")
+    parser.add_argument("--host", type=str, default=None, help="Override server host")
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
         print("ERROR: CUDA required")
         return
 
+    global CONFIG
+    CONFIG = load_config(args.config)
+
+    host = args.host or CONFIG["server"]["host"]
+    port = args.port or CONFIG["server"]["port"]
     device = "cuda"
-    requested = args.models.split(",") if args.models != "all" else list(BASE_MODELS.keys()) + ["smollm2-witness"]
 
-    for name in requested:
-        name = name.strip()
-        if name in BASE_MODELS:
-            load_model(name, BASE_MODELS[name], device)
-        elif name == "smollm2-witness":
-            load_model("smollm2-witness", args.witness_checkpoint, device)
-        else:
-            print(f"Unknown model: {name}. Available: {list(BASE_MODELS.keys()) + ['smollm2-witness']}")
+    # Load models from config
+    models_cfg = CONFIG.get("models", {})
+    for name, mcfg in models_cfg.items():
+        if not isinstance(mcfg, dict):
+            continue
+        if args.model and name != args.model:
+            continue
+        if not mcfg.get("enabled", True):
+            continue
+        load_model(name, mcfg["path"], device)
+        if mcfg.get("default"):
+            CONFIG["_default_model"] = name
 
-    print(f"\nServing {list(MODELS.keys())} on {args.host}:{args.port}")
-    uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
+    if not MODELS:
+        print("ERROR: No models loaded. Check serve.yaml.")
+        return
+
+    print(f"\nServing {list(MODELS.keys())} on {host}:{port}")
+    uvicorn.run(app, host=host, port=port, log_level="warning")
 
 
 if __name__ == "__main__":
